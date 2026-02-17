@@ -3,7 +3,7 @@ import pandas as pd
 import random
 
 # --- CONFIGURATION ---
-ADMIN_PASSWORD = "aaib_ramadan"  # Change this password!
+ADMIN_PASSWORD = "AAib@2026"  # Change this password!
 
 # --- DATA INITIALIZATION ---
 if 'teams' not in st.session_state:
