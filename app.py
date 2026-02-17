@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="AAIB Ramadan Cup", layout="wide")
 
 # --- PASSWORD ---
-ADMIN_PASSWORD = "aaib"
+ADMIN_PASSWORD = "aaib@2026"
 
 # --- CONNECT TO GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
