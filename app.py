@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="AAIB Ramadan Cup", layout="wide")
@@ -19,42 +19,36 @@ if 'stats' not in st.session_state:
 
 # --- HELPER FUNCTIONS ---
 def generate_fixtures(teams_a, teams_b):
-    fixtures = []
-    match_id = 1
+    matches = []
     
-    # Function to create round robin for a group
-    def create_group_matches(group_teams, group_name):
-        matches = []
-        # Simple Round Robin
-        for i in range(len(group_teams)):
-            for j in range(i + 1, len(group_teams)):
-                matches.append({
+    # Helper to create group matches
+    def create_group_matches(teams, group_name):
+        group_matches = []
+        for i in range(len(teams)):
+            for j in range(i + 1, len(teams)):
+                group_matches.append({
                     'Group': group_name,
-                    'Home': group_teams[i],
-                    'Away': group_teams[j]
+                    'Home': teams[i],
+                    'Away': teams[j]
                 })
-        return matches
+        return group_matches
 
-    # Generate matches
-    matches_a = create_group_matches(teams_a, 'A')
-    matches_b = create_group_matches(teams_b, 'B')
+    matches.extend(create_group_matches(teams_a, 'A'))
+    matches.extend(create_group_matches(teams_b, 'B'))
+    random.shuffle(matches)
     
-    all_matches = matches_a + matches_b
-    random.shuffle(all_matches)  # Shuffle playing time as requested
-    
-    # Assign Dates (Spread over 5 days)
     start_date = datetime.now().date()
-    
     final_schedule = []
-    for idx, m in enumerate(all_matches):
-        day_offset = idx % 5 # Distribute across 5 days
+    
+    for idx, m in enumerate(matches):
+        day_offset = idx % 5
         match_date = start_date + timedelta(days=day_offset)
         
         final_schedule.append({
             'MatchID': idx + 1,
             'Group': m['Group'],
-            'Date': match_date,
-            'Time': "22:00", # Default time
+            'Date': match_date,  # Ensures strictly date object
+            'Time': time(22, 0), # Ensures strictly time object
             'Home': m['Home'],
             'Away': m['Away'],
             'H_Score': 0,
@@ -65,46 +59,53 @@ def generate_fixtures(teams_a, teams_b):
     return pd.DataFrame(final_schedule)
 
 def calculate_standings(schedule_df, group_name):
-    # Filter matches for this group that have been played
-    played_matches = schedule_df[(schedule_df['Group'] == group_name) & (schedule_df['Played'] == True)]
+    # Ensure types for calculation
+    df = schedule_df.copy()
     
-    # Get unique teams from the schedule (even if they haven't played yet)
-    group_matches = schedule_df[schedule_df['Group'] == group_name]
-    teams = list(set(group_matches['Home'].unique()) | set(group_matches['Away'].unique()))
+    # Filter for the specific group
+    group_df = df[df['Group'] == group_name]
     
-    data = []
+    # Get all unique teams in this group
+    teams = set(group_df['Home'].unique()) | set(group_df['Away'].unique())
+    
+    stats = []
     for team in teams:
-        p = w = d = l = gf = ga = pts = 0
-        for idx, row in played_matches.iterrows():
-            if row['Home'] == team or row['Away'] == team:
-                p += 1
-                is_home = row['Home'] == team
-                my_s = row['H_Score'] if is_home else row['A_Score']
-                op_s = row['A_Score'] if is_home else row['H_Score']
-                gf += my_s
-                ga += op_s
-                
-                if my_s > op_s:
-                    w += 1; pts += 3
-                elif my_s == op_s:
-                    d += 1; pts += 1
-                else:
-                    l += 1
-        gd = gf - ga
-        data.append([team, p, w, d, l, gf, ga, gd, pts])
+        played = won = drawn = lost = gf = ga = pts = 0
         
-    df = pd.DataFrame(data, columns=['Team', 'P', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts'])
-    return df.sort_values(by=['Pts', 'GD', 'GF'], ascending=False)
+        # Only look at matches marked as 'Played'
+        finished_matches = group_df[(group_df['Played'] == True) & ((group_df['Home'] == team) | (group_df['Away'] == team))]
+        
+        for _, row in finished_matches.iterrows():
+            played += 1
+            is_home = row['Home'] == team
+            my_score = row['H_Score'] if is_home else row['A_Score']
+            op_score = row['A_Score'] if is_home else row['H_Score']
+            
+            gf += my_score
+            ga += op_score
+            
+            if my_score > op_score:
+                won += 1
+                pts += 3
+            elif my_score == op_score:
+                drawn += 1
+                pts += 1
+            else:
+                lost += 1
+                
+        gd = gf - ga
+        stats.append([team, played, won, drawn, lost, gf, ga, gd, pts])
+        
+    res_df = pd.DataFrame(stats, columns=['Team', 'P', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts'])
+    return res_df.sort_values(by=['Pts', 'GD', 'GF'], ascending=False)
 
 # --- APP LAYOUT ---
-
 st.title("🏆 AAIB Ramadan Tournament Manager")
 
-# tabs
 tab_admin, tab_public = st.tabs(["🔒 ADMIN CONTROL PANEL", "🌍 PUBLIC DASHBOARD"])
 
 # ==========================================
-# TAB 1: ADMIN PANEL (FULL CONTROL)
+# TAB 1: ADMIN PANEL
 # ==========================================
 with tab_admin:
     password = st.text_input("Enter Admin Password", type="password")
@@ -112,137 +113,131 @@ with tab_admin:
     if password == ADMIN_PASSWORD:
         st.success("Admin Access Granted")
         
-        # SECTION A: TEAM SETUP
-        st.markdown("### 1. Setup Teams & Generate Schedule")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.info("Group A (4 Teams)")
-            team_a_input = st.text_area("Enter Group A Teams (One per line)", "AAIB Alpha\nAAIB Beta\nAAIB Gamma\nAAIB Delta")
-        with col2:
-            st.info("Group B (3 Teams)")
-            team_b_input = st.text_area("Enter Group B Teams (One per line)", "AAIB Red\nAAIB Blue\nAAIB Green")
-            
-        if st.button("🚀 GENERATE TOURNAMENT SCHEDULE"):
-            t_a = [x.strip() for x in team_a_input.split('\n') if x.strip()]
-            t_b = [x.strip() for x in team_b_input.split('\n') if x.strip()]
-            
+        # --- 1. SETUP & GENERATE ---
+        st.subheader("Step 1: Setup Teams")
+        c1, c2 = st.columns(2)
+        teams_a_txt = c1.text_area("Group A Teams (One per line)", "AAIB Alpha\nAAIB Beta\nAAIB Gamma\nAAIB Delta")
+        teams_b_txt = c2.text_area("Group B Teams (One per line)", "AAIB Red\nAAIB Blue\nAAIB Green")
+        
+        if st.button("🚀 GENERATE SCHEDULE"):
+            t_a = [x.strip() for x in teams_a_txt.split('\n') if x.strip()]
+            t_b = [x.strip() for x in teams_b_txt.split('\n') if x.strip()]
             if len(t_a) < 2 or len(t_b) < 2:
-                st.error("Please enter at least 2 teams in each group.")
+                st.error("Need at least 2 teams per group.")
             else:
-                st.session_state.teams['A'] = t_a
-                st.session_state.teams['B'] = t_b
                 st.session_state.schedule = generate_fixtures(t_a, t_b)
-                st.success("Schedule Generated Successfully! Go to Section 2 to edit dates.")
+                st.session_state.teams = {'A': t_a, 'B': t_b}
+                st.success("Schedule Generated!")
+                st.rerun()
 
         st.divider()
 
-        # SECTION B: SCHEDULE & RESULTS EDITOR
-        st.markdown("### 2. Match Management (Edit Dates, Times & Scores)")
-        st.write("You can change Dates, Times, and Scores directly in this table below.")
+        # --- 2. MANAGE MATCHES ---
+        st.subheader("Step 2: Manage Matches (Edit & Save)")
         
         if not st.session_state.schedule.empty:
-            # THIS IS THE POWER FEATURE: DATA EDITOR
-            edited_schedule = st.data_editor(
-                st.session_state.schedule,
+            st.info("Double-click cells to edit Dates, Scores, or check 'Played'.")
+            
+            # Ensure correct types before editor
+            df_to_edit = st.session_state.schedule.copy()
+            # Convert columns if they aren't already correct types
+            df_to_edit['Date'] = pd.to_datetime(df_to_edit['Date']).dt.date
+            # Time column handling is tricky, simplified here:
+            if not isinstance(df_to_edit['Time'].iloc[0], time):
+                 df_to_edit['Time'] = [time(22, 0) for _ in range(len(df_to_edit))]
+
+            edited_df = st.data_editor(
+                df_to_edit,
                 column_config={
-                    "Date": st.column_config.DateColumn("Match Date"),
-                    "Time": st.column_config.TimeColumn("Time"),
-                    "Played": st.column_config.CheckboxColumn("Match Finished?", help="Check this box when match is over to update standings")
+                    "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
+                    "Time": st.column_config.TimeColumn("Time", format="hh:mm a"),
+                    "H_Score": st.column_config.NumberColumn("Home Goals", min_value=0, max_value=20, step=1),
+                    "A_Score": st.column_config.NumberColumn("Away Goals", min_value=0, max_value=20, step=1),
+                    "Played": st.column_config.CheckboxColumn("Finished?", help="Check to update standings")
                 },
-                disabled=["MatchID", "Group"],
+                disabled=["MatchID", "Group", "Home", "Away"],
                 hide_index=True,
-                use_container_width=True,
-                num_rows="dynamic"
+                use_container_width=True
             )
             
-            # Save button to commit changes
-            if st.button("💾 SAVE CHANGES TO SCHEDULE"):
-                st.session_state.schedule = edited_schedule
-                st.success("Schedule & Scores Updated!")
+            if st.button("💾 SAVE CHANGES"):
+                st.session_state.schedule = edited_df
+                st.success("Updates Saved!")
+                st.rerun()
                 
             st.divider()
             
-            # SECTION C: PLAYER STATS ENTRY
-            st.markdown("### 3. Add Player Stats (Goals & Saves)")
+            # --- 3. ADD STATS ---
+            st.subheader("Step 3: Add Player Stats")
+            sc1, sc2, sc3, sc4 = st.columns(4)
             
-            c1, c2, c3, c4 = st.columns(4)
-            p_name = c1.text_input("Player Name")
-            p_team = c2.selectbox("Team", st.session_state.teams['A'] + st.session_state.teams['B'])
-            stat_type = c3.selectbox("Stat Type", ["Goal", "Save"])
-            count = c4.number_input("Count", 1, 10, 1)
+            # Get all teams flat list
+            all_teams_list = []
+            if 'A' in st.session_state.teams: all_teams_list += st.session_state.teams['A']
+            if 'B' in st.session_state.teams: all_teams_list += st.session_state.teams['B']
+            
+            p_name = sc1.text_input("Player Name")
+            p_team = sc2.selectbox("Team", all_teams_list if all_teams_list else ["Setup Teams First"])
+            p_type = sc3.selectbox("Type", ["Goal", "Save"])
+            p_count = sc4.number_input("Count", 1, 10, 1)
             
             if st.button("Add Stat"):
-                new_stat = pd.DataFrame([[p_name, p_team, count if stat_type=="Goal" else 0, count if stat_type=="Save" else 0]], columns=['Player', 'Team', 'Goals', 'Saves'])
-                st.session_state.stats = pd.concat([st.session_state.stats, new_stat], ignore_index=True)
-                st.success(f"Added {count} {stat_type}(s) for {p_name}")
+                new_row = pd.DataFrame([[p_name, p_team, p_count if p_type=="Goal" else 0, p_count if p_type=="Save" else 0]], columns=['Player', 'Team', 'Goals', 'Saves'])
+                st.session_state.stats = pd.concat([st.session_state.stats, new_row], ignore_index=True)
+                st.success(f"Added {p_count} {p_type} for {p_name}")
 
         else:
-            st.warning("No schedule yet. Please generate it in Step 1.")
-
-    else:
-        st.warning("Please enter password to access Admin Panel")
+            st.warning("Generate Schedule in Step 1 first.")
 
 # ==========================================
-# TAB 2: PUBLIC DASHBOARD (READ ONLY)
+# TAB 2: PUBLIC VIEW
 # ==========================================
 with tab_public:
     if st.session_state.schedule.empty:
-        st.info("Tournament has not started yet. Waiting for Admin setup.")
+        st.info("Tournament setup in progress...")
     else:
-        # STANDINGS
-        st.header("📊 Group Standings")
-        col_a, col_b = st.columns(2)
-        
-        with col_a:
+        st.header("📊 Standings")
+        c1, c2 = st.columns(2)
+        with c1:
             st.subheader("Group A")
-            df_a = calculate_standings(st.session_state.schedule, 'A')
-            st.dataframe(df_a.style.highlight_max(subset=['Pts'], color='lightgreen', axis=0), hide_index=True)
-            
-        with col_b:
+            st.dataframe(calculate_standings(st.session_state.schedule, 'A').style.highlight_max(subset=['Pts'], axis=0), hide_index=True)
+        with c2:
             st.subheader("Group B")
-            df_b = calculate_standings(st.session_state.schedule, 'B')
-            st.dataframe(df_b.style.highlight_max(subset=['Pts'], color='lightgreen', axis=0), hide_index=True)
-            
+            st.dataframe(calculate_standings(st.session_state.schedule, 'B').style.highlight_max(subset=['Pts'], axis=0), hide_index=True)
+
         st.divider()
         
-        # STATS
-        st.header("🌟 Top Performers")
-        sc_col, gk_col = st.columns(2)
-        
-        with sc_col:
-            st.subheader("👟 Golden Boot")
+        st.header("🌟 Top Players")
+        c3, c4 = st.columns(2)
+        with c3:
+            st.subheader("Golden Boot ⚽")
             if not st.session_state.stats.empty:
-                scorers = st.session_state.stats.groupby(['Player', 'Team'])['Goals'].sum().reset_index().sort_values('Goals', ascending=False)
-                st.dataframe(scorers[scorers['Goals']>0], hide_index=True, use_container_width=True)
+                goals = st.session_state.stats.groupby(['Player', 'Team'])['Goals'].sum().reset_index().sort_values('Goals', ascending=False)
+                st.dataframe(goals[goals['Goals'] > 0], hide_index=True, use_container_width=True)
             else:
-                st.write("No goals recorded yet.")
+                st.write("No goals yet.")
                 
-        with gk_col:
-            st.subheader("🧤 Golden Glove")
+        with c4:
+            st.subheader("Golden Glove 🧤")
             if not st.session_state.stats.empty:
-                savers = st.session_state.stats.groupby(['Player', 'Team'])['Saves'].sum().reset_index().sort_values('Saves', ascending=False)
-                st.dataframe(savers[savers['Saves']>0], hide_index=True, use_container_width=True)
+                saves = st.session_state.stats.groupby(['Player', 'Team'])['Saves'].sum().reset_index().sort_values('Saves', ascending=False)
+                st.dataframe(saves[saves['Saves'] > 0], hide_index=True, use_container_width=True)
             else:
-                st.write("No saves recorded yet.")
-
+                st.write("No saves yet.")
+        
         st.divider()
-
-        # FIXTURES
-        st.header("📅 Match Schedule")
+        st.header("📅 Fixtures & Results")
+        # Show finished
+        done = st.session_state.schedule[st.session_state.schedule['Played']==True]
+        if not done.empty:
+            st.subheader("Results")
+            for i, r in done.iterrows():
+                st.success(f"{r['Home']} {r['H_Score']} - {r['A_Score']} {r['Away']}")
         
-        # Show upcoming matches (Where 'Played' is False)
-        upcoming = st.session_state.schedule[st.session_state.schedule['Played'] == False].sort_values('Date')
-        
-        if not upcoming.empty:
-            for i, row in upcoming.iterrows():
-                date_str = pd.to_datetime(row['Date']).strftime('%A, %d %b')
-                st.info(f"{date_str} @ {row['Time']} | **{row['Home']}** vs **{row['Away']}** (Group {row['Group']})")
-        else:
-            st.write("All matches played!")
-            
-        # Show Results
-        st.header("✅ Recent Results")
-        finished = st.session_state.schedule[st.session_state.schedule['Played'] == True].sort_values('Date', ascending=False)
-        if not finished.empty:
-            for i, row in finished.iterrows():
-                 st.success(f"**{row['Home']}** {row['H_Score']} - {row['A_Score']} **{row['Away']}**")
+        # Show upcoming
+        todo = st.session_state.schedule[st.session_state.schedule['Played']==False].sort_values('Date')
+        if not todo.empty:
+            st.subheader("Upcoming")
+            for i, r in todo.iterrows():
+                d_str = r['Date'].strftime("%d %b") if hasattr(r['Date'], 'strftime') else str(r['Date'])
+                st.info(f"{d_str} | {r['Home']} vs {r['Away']}")
