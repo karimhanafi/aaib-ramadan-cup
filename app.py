@@ -281,18 +281,33 @@ with tab_public:
         
         st.header("📅 Results & Fixtures")
         
+        # --- TIME FORMATTING HELPER ---
+        def get_12h_time(t_val):
+            try:
+                if isinstance(t_val, time):
+                    return t_val.strftime("%I:%M %p")
+                else:
+                    return pd.to_datetime(str(t_val)).strftime("%I:%M %p")
+            except:
+                return str(t_val) # Fallback if parsing fails
+
+        # FINAL MATCH
         final = st.session_state.schedule[st.session_state.schedule['Group'] == 'FINAL']
         if not final.empty:
             r = final.iloc[0]
-            st.warning(f"🏆 **FINAL MATCH**: {r['Home']} vs {r['Away']} | {r['Date']}")
+            t_str_12h = get_12h_time(r['Time'])
+            st.warning(f"🏆 **FINAL MATCH**: {r['Home']} vs {r['Away']} | 📅 {r['Date']} at ⏰ {t_str_12h}")
 
+        # UPCOMING MATCHES
         upcoming = st.session_state.schedule[st.session_state.schedule['Played'] == False].sort_values('Date')
         upcoming = upcoming[upcoming['Group'] != 'FINAL']
         if not upcoming.empty:
             st.subheader("Upcoming")
             for i, r in upcoming.iterrows():
-                st.info(f"📅 {r['Date']} | {r['Time']} | **{r['Home']}** vs **{r['Away']}**")
+                t_str_12h = get_12h_time(r['Time'])
+                st.info(f"📅 {r['Date']} | ⏰ **{t_str_12h}** | **{r['Home']}** vs **{r['Away']}**")
         
+        # RESULTS
         finished = st.session_state.schedule[st.session_state.schedule['Played'] == True].sort_values('Date', ascending=False)
         if not finished.empty:
             st.subheader("Results")
