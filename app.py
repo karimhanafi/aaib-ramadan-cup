@@ -17,46 +17,54 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def load_data():
     # 1. Load Schedule (Worksheet 0)
     try:
-        # We read by index (0) to be safer, so you don't have to rename tabs perfectly
         schedule_df = conn.read(worksheet=0, ttl=0) 
         if schedule_df.empty or 'MatchID' not in schedule_df.columns:
             st.session_state.schedule = pd.DataFrame(columns=['MatchID', 'Group', 'Date', 'Time', 'Home', 'Away', 'H_Score', 'A_Score', 'Played'])
         else:
-            # Fix Types
+            # Clean up Data Types specifically for Streamlit Editor
             schedule_df['Date'] = pd.to_datetime(schedule_df['Date']).dt.date
-            # Fix Time
+            
             def fix_time(t):
                 if pd.isna(t): return time(22, 0)
                 try: return pd.to_datetime(str(t)).time()
                 except: return time(22, 0)
             schedule_df['Time'] = schedule_df['Time'].apply(fix_time)
+            
+            # Strict Boolean casting to prevent the Checkbox crash
+            if schedule_df['Played'].dtype == object or schedule_df['Played'].dtype == str:
+                schedule_df['Played'] = schedule_df['Played'].astype(str).str.strip().str.upper() == 'TRUE'
+            else:
+                schedule_df['Played'] = schedule_df['Played'].astype(bool)
+                
+            # Strict Integer casting for goals
+            schedule_df['H_Score'] = pd.to_numeric(schedule_df['H_Score']).fillna(0).astype(int)
+            schedule_df['A_Score'] = pd.to_numeric(schedule_df['A_Score']).fillna(0).astype(int)
+
             st.session_state.schedule = schedule_df
     except Exception:
         st.session_state.schedule = pd.DataFrame(columns=['MatchID', 'Group', 'Date', 'Time', 'Home', 'Away', 'H_Score', 'A_Score', 'Played'])
 
     # 2. Load Goals (Worksheet 1)
     try:
-        # We read by index (1)
         goals_df = conn.read(worksheet=1, ttl=0)
         if goals_df.empty or 'Player' not in goals_df.columns:
             st.session_state.goal_stats = pd.DataFrame(columns=['Player', 'Team', 'Goals'])
         else:
+            goals_df['Goals'] = pd.to_numeric(goals_df['Goals']).fillna(0).astype(int)
             st.session_state.goal_stats = goals_df
     except Exception:
         st.session_state.goal_stats = pd.DataFrame(columns=['Player', 'Team', 'Goals'])
 
 def save_schedule():
-    # Save to first tab (Worksheet 0)
     df_to_save = st.session_state.schedule.copy()
     df_to_save['Time'] = df_to_save['Time'].apply(lambda x: x.strftime('%H:%M') if isinstance(x, time) else str(x))
     df_to_save['Date'] = df_to_save['Date'].astype(str)
     conn.update(worksheet=0, data=df_to_save)
-    st.toast("Schedule Saved!", icon="✅")
+    st.toast("Schedule Saved to Cloud!", icon="✅")
 
 def save_goals():
-    # Save to second tab (Worksheet 1)
     conn.update(worksheet=1, data=st.session_state.goal_stats)
-    st.toast("Goals Saved!", icon="✅")
+    st.toast("Goals Saved to Cloud!", icon="✅")
 
 # --- INITIALIZE SESSION STATE ---
 if 'schedule' not in st.session_state:
@@ -128,7 +136,7 @@ def calculate_standings(schedule_df, group_name=None):
     return res_df
 
 # --- APP LAYOUT ---
-st.title("🏆 AAIB Ramadan Tournament")
+st.title("🏆 AAIB Ramadan Tournament Manager")
 
 tab_admin, tab_public = st.tabs(["🔒 ADMIN PANEL", "🌍 PUBLIC DASHBOARD"])
 
@@ -140,11 +148,11 @@ with tab_admin:
     if password == ADMIN_PASSWORD:
         st.success("Admin Access Granted")
         
-        if st.button("🔄 Force Reload Data"):
+        if st.button("🔄 Reload Data from Cloud"):
             load_data()
             st.rerun()
 
-        st.subheader("1. Setup Teams & Generate")
+        st.subheader("1. Setup Teams")
         c1, c2 = st.columns(2)
         ta = c1.text_area("Group A Teams", "AAIB Alpha\nAAIB Beta\nAAIB Gamma\nAAIB Delta")
         tb = c2.text_area("Group B Teams", "AAIB Red\nAAIB Blue\nAAIB Green")
@@ -157,21 +165,42 @@ with tab_admin:
             else:
                 st.session_state.schedule = generate_fixtures(teams_a, teams_b)
                 save_schedule()
-                st.success("Schedule Created on Google Drive!")
+                st.success("Schedule Created & Saved to Cloud!")
                 st.rerun()
 
         st.divider()
 
         st.subheader("2. Manage Matches")
         if not st.session_state.schedule.empty:
-            df_edit = st.data_editor(st.session_state.schedule, column_config={
+            # Final Safety Cast right before the Editor
+            df_edit = st.session_state.schedule.copy()
+            df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.date
+            
+            def safe_time(t):
+                if isinstance(t, time): return t
+                try: return pd.to_datetime(str(t)).time()
+                except: return time(22,0)
+            df_edit['Time'] = df_edit['Time'].apply(safe_time)
+            
+            if df_edit['Played'].dtype == object or df_edit['Played'].dtype == str:
+                df_edit['Played'] = df_edit['Played'].astype(str).str.strip().str.upper() == 'TRUE'
+            else:
+                df_edit['Played'] = df_edit['Played'].astype(bool)
+                
+            df_edit['H_Score'] = pd.to_numeric(df_edit['H_Score']).fillna(0).astype(int)
+            df_edit['A_Score'] = pd.to_numeric(df_edit['A_Score']).fillna(0).astype(int)
+
+            # The Data Editor
+            edited_table = st.data_editor(df_edit, column_config={
                 "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                 "Time": st.column_config.TimeColumn("Time", format="hh:mm a"),
                 "Played": st.column_config.CheckboxColumn("Finished?"),
+                "H_Score": st.column_config.NumberColumn("Home Goals", min_value=0, max_value=20, step=1),
+                "A_Score": st.column_config.NumberColumn("Away Goals", min_value=0, max_value=20, step=1),
             }, disabled=["MatchID", "Group", "Home", "Away"], hide_index=True)
             
             if st.button("💾 SAVE SCORES"):
-                st.session_state.schedule = df_edit
+                st.session_state.schedule = edited_table
                 save_schedule()
                 st.rerun()
                 
@@ -205,13 +234,12 @@ with tab_admin:
                 st.success("Goal Saved!")
 
 # ==========================================
-# PUBLIC TAB (Top Scorers & Golden Glove)
+# PUBLIC TAB 
 # ==========================================
 with tab_public:
     if st.session_state.schedule.empty:
         st.info("Tournament Setup in Progress...")
     else:
-        # STANDINGS
         st.header("📊 Standings")
         c1, c2 = st.columns(2)
         with c1:
@@ -223,54 +251,41 @@ with tab_public:
 
         st.divider()
 
-        # --- SPECIAL AWARDS SECTION ---
         st.header("🌟 Hall of Fame")
         col_gold, col_glove = st.columns(2)
         
-        # 1. TOP SCORERS (Gold)
         with col_gold:
             st.subheader("👟 Top 3 Scorers")
             if not st.session_state.goal_stats.empty:
-                # Group by Name, Sum Goals, Sort Descending, Take Top 3
                 df_goals = st.session_state.goal_stats.groupby(['Player', 'Team'])['Goals'].sum().reset_index()
                 df_goals = df_goals.sort_values('Goals', ascending=False).head(3)
                 st.dataframe(df_goals, hide_index=True, use_container_width=True)
             else:
                 st.info("No goals recorded yet.")
 
-        # 2. GOLDEN GLOVE (Best Defense)
         with col_glove:
             st.subheader("🧤 Golden Glove")
             st.caption("Awarded to the team with the FEWEST goals conceded (GA).")
             
-            # Calculate stats for ALL teams
             all_standings = calculate_standings(st.session_state.schedule, None)
-            
             if not all_standings.empty:
-                # Sort by: GA (Ascending - Lower is better), then Games Played (Descending)
                 best_defense = all_standings.sort_values(by=['GA', 'P'], ascending=[True, False]).head(1)
-                
-                # Show BIG Metric
                 team_name = best_defense.iloc[0]['Team']
                 goals_against = best_defense.iloc[0]['GA']
                 st.metric(label="Current Leader", value=team_name, delta=f"Only {goals_against} Goals Conceded", delta_color="inverse")
-                
                 st.dataframe(best_defense[['Team', 'GA', 'P']], hide_index=True)
             else:
                 st.info("No matches played yet.")
 
         st.divider()
         
-        # FIXTURES
         st.header("📅 Results & Fixtures")
         
-        # Final Match
         final = st.session_state.schedule[st.session_state.schedule['Group'] == 'FINAL']
         if not final.empty:
             r = final.iloc[0]
             st.warning(f"🏆 **FINAL MATCH**: {r['Home']} vs {r['Away']} | {r['Date']}")
 
-        # Upcoming
         upcoming = st.session_state.schedule[st.session_state.schedule['Played'] == False].sort_values('Date')
         upcoming = upcoming[upcoming['Group'] != 'FINAL']
         if not upcoming.empty:
@@ -278,7 +293,6 @@ with tab_public:
             for i, r in upcoming.iterrows():
                 st.info(f"📅 {r['Date']} | {r['Time']} | **{r['Home']}** vs **{r['Away']}**")
         
-        # Results
         finished = st.session_state.schedule[st.session_state.schedule['Played'] == True].sort_values('Date', ascending=False)
         if not finished.empty:
             st.subheader("Results")
