@@ -15,7 +15,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- HELPER: LOAD & SAVE DATA ---
 def load_data():
-    # 1. Load Schedule (Worksheet 0)
     try:
         schedule_df = conn.read(worksheet=0, ttl=0) 
         if schedule_df.empty or 'MatchID' not in schedule_df.columns:
@@ -44,7 +43,6 @@ def load_data():
     except Exception:
         st.session_state.schedule = pd.DataFrame(columns=['MatchID', 'Group', 'Date', 'Time', 'Home', 'Away', 'H_Score', 'A_Score', 'Played'])
 
-    # 2. Load Goals (Worksheet 1)
     try:
         goals_df = conn.read(worksheet=1, ttl=0)
         if goals_df.empty or 'Player' not in goals_df.columns:
@@ -93,7 +91,7 @@ def generate_fixtures(teams_a, teams_b):
     final_schedule = []
     
     for idx, m in enumerate(matches):
-        day_offset = idx % 4 
+        day_offset = idx % 3 # Spread group stages over 3 days 
         match_date = start_date + timedelta(days=day_offset)
         final_schedule.append({
             'MatchID': idx + 1, 'Group': m['Group'], 'Date': match_date,
@@ -157,7 +155,7 @@ with tab_admin:
         ta = c1.text_area("Group A Teams", "AAIB Alpha\nAAIB Beta\nAAIB Gamma\nAAIB Delta")
         tb = c2.text_area("Group B Teams", "AAIB Red\nAAIB Blue\nAAIB Green")
         
-        if st.button("🚀 GENERATE SCHEDULE"):
+        if st.button("🚀 GENERATE GROUP STAGE"):
             teams_a = [x.strip() for x in ta.split('\n') if x.strip()]
             teams_b = [x.strip() for x in tb.split('\n') if x.strip()]
             if len(teams_a) < 2 or len(teams_b) < 2:
@@ -165,14 +163,13 @@ with tab_admin:
             else:
                 st.session_state.schedule = generate_fixtures(teams_a, teams_b)
                 save_schedule()
-                st.success("Schedule Created & Saved to Cloud!")
+                st.success("Group Stage Created & Saved!")
                 st.rerun()
 
         st.divider()
 
         st.subheader("2. Manage Matches")
         if not st.session_state.schedule.empty:
-            # Final Safety Cast right before the Editor
             df_edit = st.session_state.schedule.copy()
             df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.date
             
@@ -190,13 +187,12 @@ with tab_admin:
             df_edit['H_Score'] = pd.to_numeric(df_edit['H_Score']).fillna(0).astype(int)
             df_edit['A_Score'] = pd.to_numeric(df_edit['A_Score']).fillna(0).astype(int)
 
-            # The Data Editor
             edited_table = st.data_editor(df_edit, column_config={
                 "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                 "Time": st.column_config.TimeColumn("Time", format="hh:mm a"),
                 "Played": st.column_config.CheckboxColumn("Finished?"),
-                "H_Score": st.column_config.NumberColumn("Home Goals", min_value=0, max_value=20, step=1),
-                "A_Score": st.column_config.NumberColumn("Away Goals", min_value=0, max_value=20, step=1),
+                "H_Score": st.column_config.NumberColumn("Home Goals", min_value=0, max_value=30, step=1),
+                "A_Score": st.column_config.NumberColumn("Away Goals", min_value=0, max_value=30, step=1),
             }, disabled=["MatchID", "Group", "Home", "Away"], hide_index=True)
             
             if st.button("💾 SAVE SCORES"):
@@ -206,17 +202,55 @@ with tab_admin:
                 
             st.divider()
             
-            st.subheader("3. Finals")
-            if st.button("🏆 Create Final Match"):
-                std_a = calculate_standings(st.session_state.schedule, 'A')
-                std_b = calculate_standings(st.session_state.schedule, 'B')
-                if not std_a.empty and not std_b.empty:
-                    wa, wb = std_a.iloc[0]['Team'], std_b.iloc[0]['Team']
-                    final = {'MatchID': 99, 'Group': 'FINAL', 'Date': datetime.now().date()+timedelta(days=5), 'Time': time(23,0), 'Home': wa, 'Away': wb, 'H_Score': 0, 'A_Score': 0, 'Played': False}
-                    st.session_state.schedule = pd.concat([st.session_state.schedule, pd.DataFrame([final])], ignore_index=True)
-                    save_schedule()
-                    st.success("Final Created!")
-                    st.rerun()
+            st.subheader("3. Knockout Stages")
+            col_sf, col_f = st.columns(2)
+            
+            with col_sf:
+                if st.button("🥈 Generate Semi-Finals"):
+                    std_a = calculate_standings(st.session_state.schedule, 'A')
+                    std_b = calculate_standings(st.session_state.schedule, 'B')
+                    
+                    if len(std_a) >= 2 and len(std_b) >= 2:
+                        # Top 2 from each group
+                        a1, a2 = std_a.iloc[0]['Team'], std_a.iloc[1]['Team']
+                        b1, b2 = std_b.iloc[0]['Team'], std_b.iloc[1]['Team']
+                        
+                        if not st.session_state.schedule[st.session_state.schedule['Group'] == 'SEMI'].empty:
+                            st.warning("Semi-Finals already exist!")
+                        else:
+                            sf_date = datetime.now().date() + timedelta(days=3) # Day 4
+                            sf1 = {'MatchID': 91, 'Group': 'SEMI', 'Date': sf_date, 'Time': time(22,0), 'Home': a1, 'Away': b2, 'H_Score': 0, 'A_Score': 0, 'Played': False}
+                            sf2 = {'MatchID': 92, 'Group': 'SEMI', 'Date': sf_date, 'Time': time(23,0), 'Home': b1, 'Away': a2, 'H_Score': 0, 'A_Score': 0, 'Played': False}
+                            
+                            st.session_state.schedule = pd.concat([st.session_state.schedule, pd.DataFrame([sf1, sf2])], ignore_index=True)
+                            save_schedule()
+                            st.success("Semi-Finals Created! (1st A vs 2nd B) & (1st B vs 2nd A)")
+                            st.rerun()
+                    else:
+                        st.error("Not enough teams to create Semi-Finals.")
+
+            with col_f:
+                if st.button("🏆 Generate Final"):
+                    sfs = st.session_state.schedule[st.session_state.schedule['Group'] == 'SEMI']
+                    
+                    if len(sfs) == 2 and sfs.iloc[0]['Played'] == True and sfs.iloc[1]['Played'] == True:
+                        sf1, sf2 = sfs.iloc[0], sfs.iloc[1]
+                        
+                        w1 = sf1['Home'] if sf1['H_Score'] > sf1['A_Score'] else sf1['Away']
+                        w2 = sf2['Home'] if sf2['H_Score'] > sf2['A_Score'] else sf2['Away']
+
+                        if not st.session_state.schedule[st.session_state.schedule['Group'] == 'FINAL'].empty:
+                            st.warning("Final match already exists!")
+                        else:
+                            f_date = datetime.now().date() + timedelta(days=4) # Day 5
+                            final = {'MatchID': 99, 'Group': 'FINAL', 'Date': f_date, 'Time': time(23,0), 'Home': w1, 'Away': w2, 'H_Score': 0, 'A_Score': 0, 'Played': False}
+                            
+                            st.session_state.schedule = pd.concat([st.session_state.schedule, pd.DataFrame([final])], ignore_index=True)
+                            save_schedule()
+                            st.success("Final Match Created!")
+                            st.rerun()
+                    else:
+                        st.error("Please play and save BOTH Semi-Finals first! (Ensure there are no ties)")
             
             st.divider()
             
@@ -284,32 +318,40 @@ with tab_public:
         # --- TIME FORMATTING HELPER ---
         def get_12h_time(t_val):
             try:
-                if isinstance(t_val, time):
-                    return t_val.strftime("%I:%M %p")
-                else:
-                    return pd.to_datetime(str(t_val)).strftime("%I:%M %p")
-            except:
-                return str(t_val) # Fallback if parsing fails
+                if isinstance(t_val, time): return t_val.strftime("%I:%M %p")
+                else: return pd.to_datetime(str(t_val)).strftime("%I:%M %p")
+            except: return str(t_val) 
 
-        # FINAL MATCH
+        # --- KNOCKOUT STAGE DISPLAY ---
+        
+        # 1. FINAL
         final = st.session_state.schedule[st.session_state.schedule['Group'] == 'FINAL']
         if not final.empty:
             r = final.iloc[0]
-            t_str_12h = get_12h_time(r['Time'])
-            st.warning(f"🏆 **FINAL MATCH**: {r['Home']} vs {r['Away']} | 📅 {r['Date']} at ⏰ {t_str_12h}")
+            st.warning(f"🏆 **FINAL MATCH**: {r['Home']} vs {r['Away']} | 📅 {r['Date']} at ⏰ {get_12h_time(r['Time'])}")
+            
+        # 2. SEMI-FINALS
+        semis = st.session_state.schedule[st.session_state.schedule['Group'] == 'SEMI'].sort_values('Date')
+        if not semis.empty:
+            st.subheader("Semi-Finals")
+            for i, r in semis.iterrows():
+                if r['Played']:
+                    st.success(f"✅ Semi-Final: {r['Home']} ({r['H_Score']}) - ({r['A_Score']}) {r['Away']}")
+                else:
+                    st.info(f"🥈 Semi-Final: **{r['Home']}** vs **{r['Away']}** | 📅 {r['Date']} at ⏰ {get_12h_time(r['Time'])}")
 
-        # UPCOMING MATCHES
-        upcoming = st.session_state.schedule[st.session_state.schedule['Played'] == False].sort_values('Date')
-        upcoming = upcoming[upcoming['Group'] != 'FINAL']
+        st.divider()
+
+        # UPCOMING GROUP MATCHES
+        upcoming = st.session_state.schedule[(st.session_state.schedule['Played'] == False) & (st.session_state.schedule['Group'].isin(['A', 'B']))].sort_values('Date')
         if not upcoming.empty:
-            st.subheader("Upcoming")
+            st.subheader("Upcoming Group Matches")
             for i, r in upcoming.iterrows():
-                t_str_12h = get_12h_time(r['Time'])
-                st.info(f"📅 {r['Date']} | ⏰ **{t_str_12h}** | **{r['Home']}** vs **{r['Away']}**")
+                st.info(f"📅 {r['Date']} | ⏰ **{get_12h_time(r['Time'])}** | Group {r['Group']}: **{r['Home']}** vs **{r['Away']}**")
         
-        # RESULTS
-        finished = st.session_state.schedule[st.session_state.schedule['Played'] == True].sort_values('Date', ascending=False)
+        # PAST GROUP RESULTS
+        finished = st.session_state.schedule[(st.session_state.schedule['Played'] == True) & (st.session_state.schedule['Group'].isin(['A', 'B']))].sort_values('Date', ascending=False)
         if not finished.empty:
-            st.subheader("Results")
+            st.subheader("Group Stage Results")
             for i, r in finished.iterrows():
-                st.success(f"✅ {r['Home']} ({r['H_Score']}) - ({r['A_Score']}) {r['Away']}")
+                st.success(f"✅ Group {r['Group']}: {r['Home']} ({r['H_Score']}) - ({r['A_Score']}) {r['Away']}")
